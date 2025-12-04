@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BKK GO - 曼谷旅伴 v31</title>
+    
+    <!-- 1. 樣式庫 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- 2. 核心程式庫 -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+    <!-- 3. 錯誤捕捉 -->
+    <script>
+        window.onerror = function(msg, url, line) {
+            var loader = document.getElementById('loading-screen');
+            if(loader) loader.style.display = 'none';
+            return false;
+        };
+    </script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'thai-bg': '#FDFBF7',
+                        'thai-green': '#4F776C',
+                        'thai-tea': '#D97757',
+                        'thai-stone': '#8C8881',
+                        'thai-light': '#E8E6E1',
+                        'ai-purple': '#8B5CF6',
+                    },
+                    fontFamily: {
+                        sans: ['Noto Sans TC', 'sans-serif'],
+                        serif: ['Playfair Display', 'serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #FDFBF7; -webkit-tap-highlight-color: transparent; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .glass-panel { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+        #map { z-index: 0; height: 100%; width: 100%; }
+        .calc-input { background: transparent; border: none; outline: none; font-family: monospace; width: 100%; text-align: right; }
+        .markdown-body p { margin-bottom: 0.5em; }
+        [v-cloak] { display: none; }
+        
+        /* Loading Screen */
+        #loading-screen {
+            position: fixed; inset: 0; background: #FDFBF7; z-index: 9999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            color: #4F776C; transition: opacity 0.5s ease;
+        }
+        
+        /* Weather Card */
+        .weather-card-bg {
+            background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+        }
+        .glass-box {
+            background: rgba(255, 255, 255, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(4px);
+        }
+    </style>
+</head>
+<body class="text-gray-700 h-screen overflow-hidden flex flex-col bg-thai-bg">
+
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+        <i class="fa-solid fa-circle-notch fa-spin text-4xl mb-4"></i>
+        <p class="font-serif font-bold text-xl">BKK GO</p>
+        <p class="text-xs text-gray-400 mt-2">準備分帳功能中...</p>
+        <button onclick="document.getElementById('loading-screen').style.display='none'" class="mt-8 px-4 py-2 border border-red-200 text-red-400 text-xs rounded-lg">
+            略過載入
+        </button>
+    </div>
+
+    <div id="app" class="h-full flex flex-col max-w-md mx-auto bg-thai-bg shadow-2xl relative w-full" v-cloak>
+        
+        <!-- Header -->
+        <header class="px-6 pt-12 pb-2 z-10 flex justify-between items-end sticky top-0 bg-thai-bg/95 backdrop-blur-sm transition-all duration-300">
+            <div>
+                <div class="flex items-center gap-2">
+                    <p class="text-xs text-thai-stone font-medium tracking-widest uppercase">{{ currentDateDisplay }}</p>
+                    <span v-if="isFirebaseMode" class="flex items-center gap-1 bg-green-100 px-2 py-0.5 rounded-full border border-green-200">
+                        <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                        <span class="text-[9px] text-green-700 font-bold">已同步</span>
+                    </span>
+                    <span v-else class="flex items-center gap-1 bg-gray-200 px-2 py-0.5 rounded-full cursor-pointer" @click="showSettings=true">
+                        <span class="text-[9px] text-gray-500 font-bold">單機版</span>
+                    </span>
+                </div>
+                <h1 class="text-3xl font-serif font-bold text-thai-green tracking-wide">BKK GO.</h1>
+            </div>
+            <!-- User Group Icon (Settings) -->
+            <div class="w-10 h-10 rounded-full border border-thai-stone/20 flex items-center justify-center text-thai-green cursor-pointer hover:bg-thai-green hover:text-white transition-colors" @click="showSettings = true">
+                <i class="fa-solid fa-user-group text-sm"></i>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="flex-1 overflow-y-auto no-scrollbar relative flex flex-col">
+            
+            <!-- Tab: AI Advisor -->
+            <div v-show="activeTab === 'ai'" class="pb-28 h-full flex flex-col bg-gray-50">
+                <div class="bg-white px-6 py-4 shadow-sm z-10 flex items-center gap-3 sticky top-0">
+                    <div class="w-10 h-10 rounded-full bg-ai-purple flex items-center justify-center text-white shadow-md"><i class="fa-solid fa-robot"></i></div>
+                    <div><h3 class="font-bold text-gray-800">AI 曼谷導遊</h3><p class="text-xs text-gray-400">Gemini 支援</p></div>
+                </div>
+                <div class="flex-1 overflow-y-auto px-4 py-4 space-y-4" id="chat-container">
+                    <div v-if="!geminiApiKey" class="text-center py-10 px-6 bg-yellow-50 border border-yellow-200 rounded-2xl text-sm text-yellow-800">
+                        <p>請先至「設定」輸入 API Key。</p>
+                        <button @click="showSettings=true" class="mt-2 text-blue-500 underline font-bold">去設定</button>
+                    </div>
+                    <div v-for="(msg, idx) in chatHistory" :key="idx" class="flex" :class="msg.role === 'user' ? 'justify-end' : 'justify-start'">
+                        <div v-if="msg.role === 'model'" class="w-8 h-8 rounded-full bg-ai-purple flex-shrink-0 flex items-center justify-center text-white text-xs mr-2 mt-1"><i class="fa-solid fa-robot"></i></div>
+                        <div class="max-w-[85%] p-3 rounded-2xl text-sm shadow-sm" :class="msg.role === 'user' ? 'bg-thai-green text-white rounded-tr-none' : 'bg-white text-gray-700 rounded-tl-none border border-gray-100'">
+                            <div v-if="msg.role === 'model'" v-html="renderMarkdown(msg.text)" class="markdown-body"></div>
+                            <div v-else>{{ msg.text }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white p-4 pb-safe border-t border-gray-100 flex gap-2">
+                    <input v-model="chatInput" @keyup.enter="sendMessage" type="text" :disabled="!geminiApiKey" placeholder="輸入問題..." class="flex-1 bg-gray-100 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 ring-ai-purple/50">
+                    <button @click="sendMessage" :disabled="!chatInput.trim()" class="bg-ai-purple text-white w-12 rounded-xl flex items-center justify-center disabled:opacity-50"><i class="fa-solid fa-paper-plane"></i></button>
+                </div>
+            </div>
+
+            <!-- Tab: Info -->
+            <div v-show="activeTab === 'info'" class="pb-28 px-6 pt-4 animate-fade space-y-6">
+                <div class="flex items-center gap-2 mb-2 opacity-60"><i class="fa-solid fa-plane-departure text-sm"></i><span class="text-xs font-bold tracking-widest uppercase">Flight Info</span></div>
+                <div class="bg-white rounded-3xl p-5 shadow-sm border border-stone-100 relative overflow-hidden group">
+                    <div class="absolute top-0 right-0 bg-thai-green/10 text-thai-green px-3 py-1 rounded-bl-2xl text-[10px] font-bold">去程 12/11</div>
+                    <div class="flex justify-between items-start mb-4"><div class="text-left"><span class="text-3xl font-serif font-bold text-gray-800">KHH</span><p class="text-[10px] text-gray-400">Kaohsiung</p></div><div class="flex-1 flex flex-col items-center px-2 mt-2"><i class="fa-solid fa-plane text-thai-green text-sm"></i><div class="w-full h-[1px] bg-gray-200 my-1 relative"><div class="absolute left-1/2 -translate-x-1/2 -top-1.5 bg-white px-1 text-[9px] text-gray-400">3h 25m</div></div><span class="text-[10px] font-bold text-thai-tea">SL 391</span></div><div class="text-right"><span class="text-3xl font-serif font-bold text-gray-800">DMK</span><p class="text-[10px] text-gray-400">Don Mueang</p></div></div>
+                    <div class="flex justify-between items-center bg-gray-50 rounded-xl p-3"><div><p class="text-[10px] text-gray-400">出發</p><p class="font-bold text-sm text-gray-700">13:40</p></div><div class="text-right"><p class="text-[10px] text-gray-400">抵達</p><p class="font-bold text-sm text-gray-700">16:00</p></div></div>
+                </div>
+                <div class="bg-white rounded-3xl p-5 shadow-sm border border-stone-100 relative overflow-hidden group">
+                    <div class="absolute top-0 right-0 bg-orange-100 text-orange-500 px-3 py-1 rounded-bl-2xl text-[10px] font-bold">回程 12/16</div>
+                    <div class="flex justify-between items-start mb-4"><div class="text-left"><span class="text-3xl font-serif font-bold text-gray-800">DMK</span><p class="text-[10px] text-gray-400">Don Mueang</p></div><div class="flex-1 flex flex-col items-center px-2 mt-2"><i class="fa-solid fa-plane fa-rotate-180 text-orange-400 text-sm"></i><div class="w-full h-[1px] bg-gray-200 my-1 relative"><div class="absolute left-1/2 -translate-x-1/2 -top-1.5 bg-white px-1 text-[9px] text-gray-400">3h 25m</div></div><span class="text-[10px] font-bold text-thai-tea">SL 390</span></div><div class="text-right"><span class="text-3xl font-serif font-bold text-gray-800">KHH</span><p class="text-[10px] text-gray-400">Kaohsiung</p></div></div>
+                    <div class="flex justify-between items-center bg-gray-50 rounded-xl p-3"><div><p class="text-[10px] text-gray-400">出發</p><p class="font-bold text-sm text-gray-700">02:45</p></div><div class="text-right"><p class="text-[10px] text-gray-400">抵達</p><p class="font-bold text-sm text-gray-700">07:15</p></div></div>
+                </div>
+                
+                <!-- Hotel Info -->
+                <div class="pt-2">
+                     <div class="flex items-center gap-2 mb-2 opacity-60"><i class="fa-solid fa-hotel text-sm"></i><span class="text-xs font-bold tracking-widest uppercase">Hotel Info</span></div>
+                    <div class="bg-white rounded-[2rem] overflow-hidden shadow-sm border border-stone-100">
+                        <div class="h-40 bg-gray-200 relative">
+                            <img src="https://cf.bstatic.com/xdata/images/hotel/max1024x768/164789853.jpg?k=7a916128038740c02581977717448834d8527780005d26307736151f8742d13b&o=&hp=1" class="w-full h-full object-cover">
+                            <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+                            <div class="absolute bottom-4 left-5 text-white">
+                                <h3 class="text-2xl font-serif font-bold">Happy 3 Hotel</h3>
+                                <p class="text-xs opacity-90"><i class="fa-solid fa-star text-yellow-400 text-[10px] mr-1"></i>3 星級飯店</p>
+                            </div>
+                        </div>
+                        <div class="p-5 space-y-4">
+                            <div class="flex items-start gap-3">
+                                <div class="w-8 h-8 rounded-full bg-blue-50 flex-shrink-0 flex items-center justify-center text-blue-500"><i class="fa-solid fa-location-dot text-sm"></i></div>
+                                <div>
+                                    <p class="text-xs text-gray-400 mb-0.5">Address</p>
+                                    <p class="text-sm text-gray-700 leading-snug font-medium">33 Soi Kasemsan 3, Rama 1 Rd., Wangmai, Pathumwan, Bangkok 10330</p>
+                                </div>
+                            </div>
+                            <div class="flex items-start gap-3">
+                                <div class="w-8 h-8 rounded-full bg-green-50 flex-shrink-0 flex items-center justify-center text-green-500"><i class="fa-solid fa-phone text-sm"></i></div>
+                                <div>
+                                    <p class="text-xs text-gray-400 mb-0.5">Phone</p>
+                                    <a href="tel:+6626124799" class="text-sm text-gray-700 font-bold hover:text-thai-green">+66 2 612 4799</a>
+                                </div>
+                            </div>
+                            <a href="https://www.google.com/maps/search/?api=1&query=Happy+3+Hotel+Bangkok" target="_blank" class="flex items-center justify-center w-full bg-gray-800 text-white py-3 rounded-xl font-bold shadow-lg shadow-gray-200 active:scale-95 transition-transform"><i class="fa-solid fa-map-location-dot mr-2"></i> Google Maps 導航</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Itinerary -->
+            <div v-show="activeTab === 'itinerary'" class="pb-28 animate-fade">
+                <div class="sticky top-0 z-20 bg-gradient-to-b from-thai-bg via-thai-bg/95 to-transparent pb-2">
+                    <div class="flex justify-between items-center px-6 mb-2 pt-4">
+                        <h3 class="font-serif font-bold text-lg text-thai-green">每日行程</h3>
+                        <button @click="analyzeItinerary" v-if="geminiApiKey" class="bg-ai-purple text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 shadow-lg shadow-purple-200 active:scale-95 transition-transform"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 分析</button>
+                    </div>
+                    <div class="flex overflow-x-auto no-scrollbar px-6 gap-3 items-center snap-x">
+                        <button v-for="(day, index) in days" :key="index" @click="currentDayIndex = index" class="flex-shrink-0 relative px-5 py-2.5 rounded-full text-sm transition-all duration-300 snap-center border" :class="currentDayIndex === index ? 'bg-thai-green text-white border-thai-green shadow-lg shadow-thai-green/30' : 'bg-white text-thai-stone border-gray-100'"><span class="font-serif italic pr-1">Day</span> {{ index + 1 }}</button>
+                        <button @click="addDay" class="flex-shrink-0 w-10 h-10 rounded-full bg-white border border-dashed border-gray-300 text-gray-400 flex items-center justify-center snap-center"><i class="fa-solid fa-plus text-xs"></i></button>
+                    </div>
+                </div>
+                
+                <!-- WEATHER CARD -->
+                <div v-if="dailyForecast" class="mx-6 mt-2 mb-4 p-5 rounded-3xl text-white shadow-lg relative overflow-hidden weather-card-bg">
+                    <div class="relative z-10 flex justify-between items-center">
+                        <div>
+                            <div class="text-[10px] font-bold opacity-90 uppercase tracking-wide mb-1 flex items-center gap-1">
+                                <i class="fa-solid fa-calendar-day"></i> {{ dailyForecast.dateDisplay }} 氣象預報
+                            </div>
+                            <div class="flex items-center gap-3 mb-1">
+                                <i :class="dailyForecast.icon" class="text-4xl drop-shadow-md"></i>
+                                <div>
+                                    <span class="text-4xl font-bold font-serif drop-shadow-md">{{ dailyForecast.maxTemp }}°</span>
+                                    <span class="text-sm opacity-80 font-normal ml-1">/ {{ dailyForecast.minTemp }}°</span>
+                                </div>
+                            </div>
+                            <p class="text-sm font-medium opacity-95">{{ dailyForecast.desc }}</p>
+                        </div>
+                        <div class="text-right max-w-[55%] flex flex-col items-end justify-center h-full">
+                             <div class="glass-box p-3 rounded-2xl text-right w-full">
+                                <p class="text-[10px] font-bold mb-1 flex items-center justify-end gap-1 opacity-90"><i class="fa-solid fa-shirt"></i> 穿搭建議</p>
+                                <p class="text-xs leading-tight font-medium">{{ dailyForecast.suggestion }}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="absolute -right-6 -top-8 w-40 h-40 bg-white/20 rounded-full blur-3xl mix-blend-overlay"></div>
+                    <div class="absolute -left-6 -bottom-8 w-32 h-32 bg-yellow-300/20 rounded-full blur-2xl mix-blend-overlay"></div>
+                </div>
+
+                <!-- Timeline -->
+                <div class="px-6 mt-1">
+                    <div v-if="currentDayItems.length === 0" class="text-center py-24 opacity-40"><i class="fa-brands fa-pagelines text-5xl mb-4 text-thai-stone"></i><p class="text-thai-stone font-serif italic">開始規劃你的旅程...</p></div>
+                    <div v-else class="space-y-6 pb-10">
+                        <div v-for="(item, idx) in currentDayItems" :key="item.id" class="group relative pl-4 border-l-2 border-thai-light/50">
+                            <div class="absolute -left-[9px] top-6 w-4 h-4 rounded-full border-2 border-thai-bg" :class="getCategoryColor(item.category, true)"></div>
+                            <div @click="editItem(item)" class="bg-white rounded-[1.5rem] p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-stone-50 active:scale-[0.98] transition-transform cursor-pointer relative overflow-hidden">
+                                <div class="flex justify-between items-start">
+                                    <div class="flex-1 pr-4">
+                                        <div class="flex items-center gap-2 mb-2"><span class="text-xs font-bold tracking-wider text-thai-tea font-mono">{{ item.time }}</span><span class="text-[10px] text-gray-400 border border-gray-100 px-1.5 py-0.5 rounded-md uppercase tracking-wide">{{ translateCategory(item.category) }}</span></div>
+                                        <h3 class="font-bold text-lg text-gray-800 mb-1 leading-snug">{{ item.title }}</h3>
+                                        <button @click.stop="openGoogleMaps(item.location)" class="text-sm text-gray-400 flex items-center gap-1.5 font-light hover:text-thai-green text-left transition-colors group/link mt-1"><i class="fa-solid fa-location-dot text-[10px] text-thai-green group-hover/link:animate-bounce"></i><span class="underline decoration-dotted underline-offset-4 decoration-gray-300 group-hover/link:text-thai-green group-hover/link:decoration-thai-green">{{ item.location }}</span></button>
+                                        <p v-if="item.notes" class="mt-2 text-xs text-gray-500 bg-gray-50 p-2 rounded line-clamp-2">{{ item.notes }}</p>
+                                    </div>
+                                    <div class="flex flex-col items-center justify-center bg-gray-50 p-2 rounded-xl min-w-[54px] border border-gray-100">
+                                        <i :class="getHourlyWeather(item.time).icon" class="text-base mb-1 text-gray-500"></i>
+                                        <span class="text-[10px] font-bold text-gray-700">{{ getHourlyWeather(item.time).temp }}°</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Wallet (Split Bill) -->
+            <div v-show="activeTab === 'money'" class="pb-28 px-6 pt-2 animate-fade h-full overflow-y-auto">
+                <div class="bg-thai-tea rounded-[2.5rem] p-6 text-white shadow-xl shadow-orange-200 mb-6 relative overflow-hidden">
+                    <div class="absolute -right-4 -top-4 w-32 h-32 bg-white/10 rounded-full blur-3xl"></div>
+                    <div class="flex justify-between items-center mb-2"><p class="text-orange-100 text-xs font-medium tracking-widest uppercase">旅費總支出 (公款)</p></div>
+                    <h2 class="text-4xl font-serif font-bold mb-1">NT$ {{ Math.round(totalExpenseTWD).toLocaleString() }}</h2>
+                    <p class="text-sm text-orange-100 opacity-80 mb-4 font-mono">≈ ฿ {{ totalExpenseTHB.toLocaleString() }}</p>
+                    <div class="flex gap-3">
+                        <!-- Updated Buttons -->
+                        <button @click="showSettlement = true" class="flex-1 bg-white/10 backdrop-blur-md py-2.5 rounded-xl text-sm font-medium hover:bg-white/20 transition-colors border border-white/10">結算</button>
+                        <button @click="showAddExpense = true" class="flex-1 bg-white text-thai-tea py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-black/5 active:scale-95 transition-transform">+ 記一筆</button>
+                    </div>
+                </div>
+                <div class="flex justify-between items-end mb-4 px-2"><h3 class="font-serif font-bold text-xl text-gray-800">公款明細</h3><span class="text-xs text-gray-400">{{ expenses.length }} 筆</span></div>
+                <div class="space-y-3 pb-24"><div v-for="exp in sortedExpenses" :key="exp.id" class="bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center border border-stone-50"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-full bg-stone-50 flex items-center justify-center text-gray-400 text-sm"><i :class="getExpenseIcon(exp.category)"></i></div><div><h4 class="font-bold text-gray-800 text-sm">{{ exp.title }}</h4><p class="text-[10px] text-gray-400 mt-0.5"><span class="text-thai-tea">{{ exp.payer }}</span> 先付</p></div></div><div class="text-right"><span class="block font-bold text-gray-800 font-mono text-sm">NT${{ Math.round(exp.amount * exp.rate).toLocaleString() }}</span><span class="block text-[10px] text-gray-400 font-mono">฿{{ exp.amount }}</span></div><button @click="deleteExpense(exp.id)" class="ml-2 text-gray-300 hover:text-red-400"><i class="fa-solid fa-trash-can text-xs"></i></button></div></div>
+            </div>
+
+            <!-- Tab: Rate -->
+            <div v-show="activeTab === 'rate'" class="pb-28 px-6 pt-6 animate-fade">
+                <div class="mb-6"><h2 class="text-2xl font-serif font-bold text-gray-800 mb-1">匯率計算器</h2><p class="text-xs text-gray-400">即時匯率: open.er-api</p></div>
+                <div class="bg-gradient-to-r from-thai-green to-[#638c80] rounded-3xl p-6 text-white shadow-xl shadow-green-900/10 mb-6 relative overflow-hidden">
+                    <div class="absolute -right-6 -top-6 w-32 h-32 bg-white/10 rounded-full blur-2xl"></div>
+                    <div class="flex justify-between items-center mb-4">
+                        <div><p class="text-xs text-green-100 font-medium tracking-widest uppercase">Current Rate</p><h3 class="text-3xl font-bold font-mono mt-1">1 TWD ≈ {{ (1/exchangeRate).toFixed(2) }} THB</h3><p class="text-sm opacity-80 font-mono">1 THB ≈ {{ exchangeRate }} TWD</p></div>
+                        <button @click="fetchRate" class="bg-white/20 backdrop-blur-md w-10 h-10 rounded-full flex items-center justify-center hover:bg-white/30 transition text-white"><i class="fa-solid fa-arrows-rotate" :class="{'animate-spin': loadingRate}"></i></button>
+                    </div>
+                </div>
+                <div class="bg-white rounded-3xl shadow-sm border border-stone-100 p-2 mb-8">
+                    <div class="flex items-center p-4 border-b border-gray-100"><div class="flex items-center gap-3 w-24"><span class="font-bold text-gray-700">TWD</span></div><input type="number" v-model="calcTWD" @input="updateFromTWD" class="calc-input text-2xl font-bold text-gray-800 placeholder-gray-300" placeholder="0"></div>
+                    <div class="flex items-center p-4"><div class="flex items-center gap-3 w-24"><span class="font-bold text-gray-700">THB</span></div><input type="number" v-model="calcTHB" @input="updateFromTHB" class="calc-input text-2xl font-bold text-thai-tea placeholder-gray-300" placeholder="0"></div>
+                </div>
+                <h3 class="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2"><i class="fa-solid fa-map-location-dot text-thai-tea"></i> 尋找換錢所</h3>
+                <div class="space-y-3">
+                    <button @click="searchNearbyExchange" class="w-full bg-white border border-gray-200 p-4 rounded-2xl flex items-center justify-between shadow-sm active:scale-[0.98] group"><div class="flex items-center gap-4"><div class="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-500 text-xl group-hover:bg-blue-500 group-hover:text-white transition-colors"><i class="fa-solid fa-location-crosshairs"></i></div><div class="text-left"><h4 class="font-bold text-gray-800">搜尋附近</h4><p class="text-xs text-gray-400">Google Maps</p></div></div><i class="fa-solid fa-chevron-right text-gray-300"></i></button>
+                    <button @click="searchBrand('SuperRich Green')" class="w-full bg-white border border-gray-200 p-4 rounded-2xl flex items-center justify-between shadow-sm active:scale-[0.98] group"><div class="flex items-center gap-4"><div class="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center text-green-600 text-xl group-hover:bg-green-600 group-hover:text-white transition-colors"><i class="fa-solid fa-money-bill-wave"></i></div><div class="text-left"><h4 class="font-bold text-gray-800">SuperRich (綠)</h4><p class="text-xs text-gray-400">匯率優</p></div></div><i class="fa-solid fa-chevron-right text-gray-300"></i></button>
+                    <button @click="searchBrand('SuperRich Orange')" class="w-full bg-white border border-gray-200 p-4 rounded-2xl flex items-center justify-between shadow-sm active:scale-[0.98] group"><div class="flex items-center gap-4"><div class="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-orange-500 text-xl group-hover:bg-orange-500 group-hover:text-white transition-colors"><i class="fa-solid fa-money-bill-1-wave"></i></div><div class="text-left"><h4 class="font-bold text-gray-800">SuperRich (橘標)</h4><p class="text-xs text-gray-400">分店較多</p></div></div><i class="fa-solid fa-chevron-right text-gray-300"></i></button>
+                </div>
+            </div>
+
+            <!-- Tab 5: Map -->
+            <div v-show="activeTab === 'map'" class="h-full w-full relative bg-gray-100">
+                <div id="map" class="w-full h-full z-0"></div>
+                <div class="absolute top-4 left-4 right-4 z-[500] pointer-events-none">
+                    <div class="bg-white/90 backdrop-blur-md px-4 py-3 rounded-2xl shadow-lg border border-white pointer-events-auto flex items-center justify-between">
+                        <div><h3 class="font-bold text-thai-green text-sm">行程地圖</h3><p class="text-xs text-gray-400">Day {{ currentDayIndex + 1 }} 路線</p></div>
+                        <button @click="locateUser" class="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center shadow-md active:scale-90 transition"><i class="fa-solid fa-location-crosshairs text-xs"></i></button>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- Nav -->
+        <nav class="glass-panel px-2 py-4 flex justify-between items-center fixed bottom-0 w-full max-w-md z-30 rounded-t-[2.5rem] border-t border-white/50 pb-safe">
+            <button @click="switchTab('ai')" :class="activeTab === 'ai' ? 'text-ai-purple scale-110' : 'text-gray-300'" class="flex-1 flex flex-col items-center gap-1 transition-all duration-300"><i class="fa-solid fa-robot text-lg"></i><span class="text-[9px] font-medium">AI 導遊</span></button>
+            <button @click="switchTab('info')" :class="activeTab === 'info' ? 'text-gray-800 scale-110' : 'text-gray-300'" class="flex-1 flex flex-col items-center gap-1 transition-all duration-300"><i class="fa-solid fa-circle-info text-lg"></i><span class="text-[9px] font-medium">資訊</span></button>
+            <button @click="switchTab('itinerary')" :class="activeTab === 'itinerary' ? 'text-thai-green scale-110' : 'text-gray-300'" class="flex-1 flex flex-col items-center gap-1 transition-all duration-300"><i class="fa-regular fa-calendar text-lg"></i><span class="text-[9px] font-medium">行程</span></button>
+            <button @click="switchTab('money')" :class="activeTab === 'money' ? 'text-thai-tea scale-110' : 'text-gray-300'" class="flex-1 flex flex-col items-center gap-1 transition-all duration-300"><i class="fa-solid fa-calculator text-lg"></i><span class="text-[9px] font-medium">分帳</span></button>
+            <button @click="switchTab('rate')" :class="activeTab === 'rate' ? 'text-green-600 scale-110' : 'text-gray-300'" class="flex-1 flex flex-col items-center gap-1 transition-all duration-300"><i class="fa-solid fa-money-bill-transfer text-lg"></i><span class="text-[9px] font-medium">匯率</span></button>
+            <button @click="switchTab('map')" :class="activeTab === 'map' ? 'text-blue-500 scale-110' : 'text-gray-300'" class="flex-1 flex flex-col items-center gap-1 transition-all duration-300"><i class="fa-solid fa-map-location-dot text-lg"></i><span class="text-[9px] font-medium">地圖</span></button>
+        </nav>
+
+        <!-- Settings Modal -->
+        <div v-if="showSettings" class="fixed inset-0 bg-stone-900/40 z-50 flex items-center justify-center backdrop-blur-sm p-6" @click.self="showSettings = false">
+            <div class="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl">
+                <h3 class="text-lg font-bold mb-4">設定</h3>
+                <div class="bg-blue-50 rounded-xl p-4 mb-4 border border-blue-100" v-if="isFirebaseMode">
+                    <h4 class="text-sm font-bold text-blue-800 mb-2">邀請旅伴 (同步連結)</h4>
+                    <div class="flex gap-2"><input type="text" readonly :value="generatedInviteUrl" class="flex-1 bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs text-gray-600 outline-none" @click="$event.target.select()"><button @click="copyInviteLink" class="bg-blue-500 text-white px-4 rounded-lg text-xs font-bold whitespace-nowrap">複製</button></div>
+                </div>
+                <div class="mb-4"><label class="block text-xs font-bold text-gray-400 mb-2">Gemini API Key</label><input type="password" v-model="geminiApiKey" @change="saveApiKeys" placeholder="貼上 Key" class="w-full bg-stone-50 rounded-lg p-2 text-sm outline-none border border-gray-200"></div>
+                <div class="mb-6">
+                    <label class="block text-xs font-bold text-gray-400 mb-2">旅伴管理 (請輸入名字)</label>
+                    <div class="flex flex-wrap gap-2 mb-2"><div v-for="(user, idx) in users" :key="user" class="bg-stone-100 pl-3 pr-2 py-1 rounded-full text-sm flex items-center gap-2">{{ user }}<button v-if="users.length > 1" @click="removeUser(idx)" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-times"></i></button></div></div><div class="flex gap-2"><input v-model="newUser" placeholder="輸入名字" class="flex-1 bg-stone-50 rounded-lg p-2 text-sm outline-none border border-gray-200"><button @click="addUser" class="bg-gray-800 text-white px-3 rounded-lg text-sm">新增</button></div>
+                </div>
+                <div class="mb-4 pt-4 border-t border-gray-100"><label class="block text-xs font-bold text-gray-400 mb-2">Firebase Config</label><textarea v-model="firebaseConfigInput" class="w-full h-20 bg-stone-50 rounded-xl p-3 text-[10px] font-mono border border-gray-200 outline-none mb-2" placeholder='const firebaseConfig = { ... };'></textarea><button @click="saveFirebaseConfig" class="w-full bg-gray-800 text-white py-2 rounded-lg text-xs font-bold">儲存並連線</button></div>
+                <button @click="resetAllData" class="w-full text-red-400 text-xs py-2">重置所有資料</button>
+            </div>
+        </div>
+
+        <!-- Other Modals... -->
+        <div v-if="showAddEvent || editingItem" class="fixed inset-0 bg-stone-900/40 z-50 flex items-end sm:items-center justify-center backdrop-blur-sm" @click.self="closeEventModal"><div class="bg-white w-full max-w-md rounded-t-[2rem] p-8 shadow-2xl animate-slide-up"><h3 class="text-2xl font-bold mb-4">編輯/新增</h3><input v-model="eventForm.title" class="w-full border p-2 rounded mb-2" placeholder="標題"><textarea v-model="eventForm.notes" class="w-full border p-2 rounded mb-2" placeholder="備註"></textarea><button @click="saveEvent" class="w-full bg-thai-green text-white py-2 rounded-lg">儲存</button><button v-if="editingItem" @click="deleteEvent" class="w-full text-red-500 mt-2">刪除</button></div></div>
+        <div v-if="showAddExpense" class="fixed inset-0 bg-stone-900/40 z-50 flex items-end sm:items-center justify-center backdrop-blur-sm" @click.self="showAddExpense = false"><div class="bg-white w-full max-w-md rounded-t-[2rem] p-8 shadow-2xl animate-slide-up"><h3 class="text-xl font-bold mb-4">記一筆</h3><input v-model.number="expenseForm.amount" type="number" class="w-full border p-2 rounded mb-2" placeholder="金額 (THB)"><input v-model="expenseForm.title" class="w-full border p-2 rounded mb-2" placeholder="項目"><div class="mb-2"><label class="text-xs text-gray-400">誰先付錢？</label><div class="flex flex-wrap gap-2 mt-1"><button v-for="user in users" :key="user" @click="expenseForm.payer = user" :class="expenseForm.payer === user ? 'bg-thai-tea text-white' : 'bg-gray-100 text-gray-500'" class="px-3 py-1 rounded-lg text-sm">{{ user }}</button></div></div><button @click="saveExpense" class="w-full bg-thai-tea text-white py-2 rounded-lg">儲存</button></div></div>
+        
+        <!-- Settlement Modal (Updated Logic) -->
+        <div v-if="showSettlement" class="fixed inset-0 bg-stone-900/40 z-50 flex items-center justify-center backdrop-blur-sm p-6" @click.self="showSettlement = false">
+            <div class="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl">
+                <div class="flex justify-between items-center mb-6"><h3 class="text-xl font-bold text-gray-800">結算建議</h3><button @click="showSettlement = false"><i class="fa-solid fa-xmark text-gray-400"></i></button></div>
+                <div class="space-y-4">
+                    <div v-for="(debt, idx) in debts" :key="idx" class="flex items-center justify-between border-b border-gray-100 py-3 last:border-0">
+                        <div class="flex items-center gap-3 text-base">
+                            <span class="font-bold text-gray-700">{{ debt.from }}</span>
+                            <span class="text-gray-400 text-xs">給</span>
+                            <span class="font-bold text-thai-green">{{ debt.to }}</span>
+                        </div>
+                        <span class="font-bold text-thai-tea font-mono text-lg">NT$ {{ debt.amount }}</span>
+                    </div>
+                    <div v-if="debts.length === 0" class="text-center py-8 text-gray-400">
+                        <i class="fa-solid fa-check-circle text-4xl mb-2 text-green-200"></i><br>目前帳務已平衡！
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, watch, nextTick } = Vue;
+
+        createApp({
+            setup() {
+                const activeTab = ref('info');
+                const exchangeRate = ref(0.92);
+                const isFirebaseMode = ref(false);
+                const showSettings = ref(false);
+                const showAddEvent = ref(false);
+                const showAddExpense = ref(false);
+                const showSettlement = ref(false);
+                const editingItem = ref(null);
+                const eventForm = ref({ time: '12:00', title: '', location: '', notes: '' });
+                const expenseForm = ref({ amount: '', title: '', category: 'food', payer: '我' });
+                const firebaseConfigInput = ref('');
+                const geminiApiKey = ref('');
+                const chatInput = ref('');
+                const chatHistory = ref([{ role: 'model', text: '薩瓦迪卡 🙏 我是曼谷 AI 導遊！' }]);
+                const isAiThinking = ref(false);
+                const weatherData = ref(null);
+                const users = ref(['我', '朋友']);
+                const newUser = ref('');
+                const expenses = ref([]);
+                const currentFirebaseConfig = ref(null);
+                const loadingRate = ref(false);
+                const calcTWD = ref('');
+                const calcTHB = ref('');
+                let db = null;
+
+                // UPDATED DATA from PDF for v31
+                const defaultDays = [
+                    { date: 'Day 1 (12/11)', isoDate: '2025-12-11', items: [{id:101, time:'16:05', title:'廊曼國際機場 抵達', location:'Don Mueang International Airport', category:'transport'}, {id:102, time:'17:40', title:'Happy 3 Check-in', location:'Happy 3 Hotel', category:'activity'}, {id:103, time:'18:27', title:'暹羅廣場', location:'Siam Square', category:'shopping'}, {id:104, time:'21:27', title:'中央世界購物商場', location:'Central World', category:'shopping'}] },
+                    { date: 'Day 2 (12/12)', isoDate: '2025-12-12', items: [{id:201, time:'08:00', title:'Happy 3 出發', location:'Happy 3 Hotel', category:'activity'}, {id:202, time:'09:00', title:'王子戲院豬肉粥', location:'Prince Theatre Heritage Stay', category:'food'}, {id:203, time:'10:00', title:'KHIRI Thai Tea', location:'KHIRI Thai Tea', category:'food'}, {id:204, time:'14:00', title:'Song Wat Rd', location:'Song Wat Road', category:'history'}, {id:205, time:'17:30', title:'Horsamut', location:'Horsamut', category:'food'}, {id:206, time:'19:39', title:'臥佛寺', location:'Wat Pho', category:'history'}] },
+                    { date: 'Day 3 (12/13)', isoDate: '2025-12-13', items: [{id:301, time:'08:00', title:'Happy 3 出發', location:'Happy 3 Hotel', category:'activity'}, {id:302, time:'09:00', title:'Baan Kuay Tiew Ruathong', location:'Victory Monument Boat Noodle Alley', category:'food'}, {id:303, time:'10:00', title:'DONUT DISTURB', location:'Donut Disturb', category:'food'}, {id:304, time:'11:00', title:'Central Park', location:'Lumpini Park', category:'activity'}, {id:305, time:'12:00', title:'朱拉隆功夜市', location:'Suanluang Square', category:'food'}] },
+                    { date: 'Day 4 (12/14)', isoDate: '2025-12-14', items: [{id:401, time:'08:00', title:'Happy 3 出發', location:'Happy 3 Hotel', category:'activity'}, {id:402, time:'09:00', title:'安樂園', location:'On Lok Yun', category:'food'}, {id:403, time:'11:00', title:'唐人街夜市', location:'Yaowarat Road', category:'food'}, {id:404, time:'12:00', title:'Qilin 麒麟', location:'Qilin', category:'food'}, {id:405, time:'13:00', title:'考山路', location:'Khaosan Road', category:'activity'}] },
+                    { date: 'Day 5 (12/15)', isoDate: '2025-12-15', items: [{id:501, time:'08:00', title:'飯店早餐', location:'Happy 3 Hotel', category:'food'}, {id:502, time:'09:13', title:'Boyis. Flagship', location:'Boyis', category:'shopping'}, {id:503, time:'10:13', title:'EmSphere', location:'EmSphere', category:'shopping'}] }
+                ];
+                const days = ref(JSON.parse(JSON.stringify(defaultDays)));
+                const currentDayIndex = ref(0);
+
+                const currentDateDisplay = computed(() => new Date().toLocaleDateString());
+                const currentDayItems = computed(() => days.value[currentDayIndex.value].items.sort((a,b) => a.time.localeCompare(b.time)));
+                const sortedExpenses = computed(() => [...expenses.value].reverse());
+                const totalExpenseTHB = computed(() => expenses.value.reduce((s,e) => s + e.amount, 0));
+                const totalExpenseTWD = computed(() => expenses.value.reduce((s,e) => s + (e.amount * e.rate), 0));
+                
+                // SPLIT BILL ALGORITHM (Optimized)
+                const debts = computed(() => { 
+                    if(users.value.length===0)return[]; 
+                    
+                    // 1. Calculate Net Balances in TWD
+                    const balances = {}; 
+                    users.value.forEach(u => balances[u] = 0); 
+                    
+                    let totalSpentTWD = 0;
+                    expenses.value.forEach(exp => { 
+                        const amountTWD = Math.round(exp.amount * exp.rate); 
+                        totalSpentTWD += amountTWD;
+                        // Payer gets credit
+                        if (balances[exp.payer] !== undefined) balances[exp.payer] += amountTWD;
+                    }); 
+
+                    // Average cost per person
+                    const average = totalSpentTWD / users.value.length;
+                    
+                    // Subtract average from each person's balance to get net
+                    Object.keys(balances).forEach(u => balances[u] -= average);
+
+                    // 2. Separate into debtors (-) and creditors (+)
+                    let debtors = [];
+                    let creditors = [];
+                    for (const [user, amount] of Object.entries(balances)) {
+                        if (amount < -1) debtors.push({ user, amount }); // Owe money
+                        if (amount > 1) creditors.push({ user, amount }); // Owed money
+                    }
+
+                    // 3. Match them
+                    debtors.sort((a,b) => a.amount - b.amount);
+                    creditors.sort((a,b) => b.amount - a.amount);
+                    
+                    const result = []; 
+                    let i = 0, j = 0; 
+                    while(i < debtors.length && j < creditors.length) { 
+                        let debtVal = Math.abs(debtors[i].amount);
+                        let creditVal = creditors[j].amount;
+                        let amount = Math.min(debtVal, creditVal);
+                        
+                        if (amount > 0) {
+                            result.push({ 
+                                from: debtors[i].user, 
+                                to: creditors[j].user, 
+                                amount: Math.round(amount) 
+                            });
+                        }
+                        
+                        debtors[i].amount += amount; 
+                        creditors[j].amount -= amount; 
+                        
+                        if(Math.abs(debtors[i].amount) < 1) i++; 
+                        if(creditors[j].amount < 1) j++; 
+                    } 
+                    return result; 
+                });
+
+                const generatedInviteUrl = computed(() => { if(!currentFirebaseConfig.value) return ''; try { return window.location.href.split('?')[0] + '?invite=' + btoa(JSON.stringify(currentFirebaseConfig.value)); } catch(e){return '';} });
+                
+                // WEATHER
+                const getWeatherInfo = (code) => { 
+                    if (code === 0) return { icon: 'fa-solid fa-sun', desc: '晴朗', bg: 'sunny' }; 
+                    if ([1,2,3].includes(code)) return { icon: 'fa-solid fa-cloud-sun', desc: '多雲', bg: 'cloudy' }; 
+                    if ([45,48].includes(code)) return { icon: 'fa-solid fa-smog', desc: '霧', bg: 'cloudy' };
+                    if ([51,53,55,61,63,65,80,81,82].includes(code)) return { icon: 'fa-solid fa-cloud-showers-heavy', desc: '下雨', isRain: true, bg: 'rainy' }; 
+                    if ([95,96,99].includes(code)) return { icon: 'fa-solid fa-bolt', desc: '雷雨', isRain: true, bg: 'rainy' }; 
+                    return { icon: 'fa-solid fa-cloud', desc: '陰天', bg: 'cloudy' }; 
+                };
+                const dailyForecast = computed(() => { 
+                    const i = currentDayIndex.value; 
+                    if (weatherData.value && weatherData.value.daily && weatherData.value.daily.time[i]) {
+                        const max = Math.round(weatherData.value.daily.temperature_2m_max[i]);
+                        const min = Math.round(weatherData.value.daily.temperature_2m_min[i]);
+                        const code = weatherData.value.daily.weathercode[i];
+                        const info = getWeatherInfo(code);
+                        let suggestion = "建議攜帶雨具備用。";
+                        if (max > 32) suggestion = "天氣炎熱 🥵 建議穿著透氣短袖，多補充水分！";
+                        else if (max > 28) suggestion = "溫暖舒適 😊 適合短袖短褲，早晚可搭薄外套。";
+                        if (info.isRain) suggestion = "預報有雨 🌧️ 出門請務必攜帶折疊傘與防滑鞋。";
+                        return { dateDisplay: days.value[i].isoDate.slice(5).replace('-', '/'), maxTemp: max, minTemp: min, icon: info.icon, desc: info.desc, suggestion, weatherClass: 'weather-card-bg' };
+                    }
+                    return { dateDisplay: days.value[i].isoDate.slice(5).replace('-', '/'), maxTemp: 32, minTemp: 24, icon: 'fa-solid fa-sun', desc: '晴朗 (預測)', suggestion: "曼谷 12 月氣候舒適偏熱 ☀️ 建議穿著短袖，並準備薄外套進出冷氣房。", weatherClass: 'weather-card-bg'}; 
+                });
+                const getHourlyWeather = (t) => {
+                     let temp = 30; let icon = 'fa-sun';
+                     if(weatherData.value && weatherData.value.hourly) {
+                         const hour = parseInt(t.split(':')[0]);
+                         const flatIndex = (currentDayIndex.value * 24) + hour;
+                         if (weatherData.value.hourly.temperature_2m[flatIndex] !== undefined) {
+                             temp = Math.round(weatherData.value.hourly.temperature_2m[flatIndex]);
+                             icon = getWeatherInfo(weatherData.value.hourly.weathercode[flatIndex]).icon;
+                         }
+                     }
+                     return { temp, icon };
+                };
+
+                // Helpers
+                const getCategoryColor = (c, bg) => bg ? (c==='food'?'bg-orange-400':c==='shopping'?'bg-yellow-400':'bg-thai-green') : '';
+                const getExpenseIcon = (c) => 'fa-money-bill';
+                const translateCategory = (c) => c;
+                const openGoogleMaps = (loc) => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc+' Bangkok')}`, '_blank');
+                const renderMarkdown = (t) => marked.parse(t);
+                const updateFromTWD = () => { if (!calcTWD.value) { calcTHB.value = ''; return; } calcTHB.value = (parseFloat(calcTWD.value) / exchangeRate.value).toFixed(2); };
+                const updateFromTHB = () => { if (!calcTHB.value) { calcTWD.value = ''; return; } calcTWD.value = (parseFloat(calcTHB.value) * exchangeRate.value).toFixed(2); };
+                const searchNearbyExchange = () => window.open('https://www.google.com/maps/search/currency+exchange/', '_blank');
+                const searchBrand = (brand) => window.open(`https://www.google.com/maps/search/${encodeURIComponent(brand + ' Bangkok')}`, '_blank');
+                
+                // Actions
+                const switchTab = (t) => { activeTab.value = t; if(t==='map') nextTick(initMap); };
+                const addDay = () => days.value.push({ date: `Day ${days.value.length+1}`, isoDate: '2025-12-16', items: [] });
+                const closeEventModal = () => { showAddEvent.value = false; editingItem.value = null; };
+                const editItem = (item) => { editingItem.value = item; eventForm.value = {...item}; showAddEvent.value = true; };
+                const saveEvent = () => { if(editingItem.value) Object.assign(editingItem.value, eventForm.value); else days.value[currentDayIndex.value].items.push({...eventForm.value, id: Date.now(), category: 'activity'}); saveData(); closeEventModal(); };
+                const deleteEvent = () => { const idx = days.value[currentDayIndex.value].items.indexOf(editingItem.value); if(idx>-1) days.value[currentDayIndex.value].items.splice(idx,1); saveData(); closeEventModal(); };
+                const saveExpense = () => { expenses.value.push({...expenseForm.value, id: Date.now(), rate: exchangeRate.value}); saveData(); showAddExpense.value = false; };
+                const deleteExpense = (id) => { if(confirm('刪除？')) expenses.value = expenses.value.filter(e=>e.id!==id); saveData(); };
+                const addUser = () => { if(newUser.value) { users.value.push(newUser.value); newUser.value=''; saveData(); } };
+                const removeUser = (i) => { users.value.splice(i,1); saveData(); };
+                const fetchRate = async () => { loadingRate.value=true; try{ const res = await fetch('https://open.er-api.com/v6/latest/THB'); const d = await res.json(); if(d.rates.TWD) exchangeRate.value = d.rates.TWD; }catch(e){} finally { loadingRate.value=false; }};
+                const saveApiKeys = () => saveData();
+                const copyInviteLink = () => { navigator.clipboard.writeText(generatedInviteUrl.value); alert('已複製'); };
+                const resetAllData = () => { localStorage.removeItem('bkk_pro_v31'); location.reload(); };
+                const sendMessage = async () => { if(!chatInput.value || !geminiApiKey.value) return; const txt = chatInput.value; chatInput.value=''; chatHistory.value.push({role:'user', text:txt}); isAiThinking.value=true; try{ const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey.value}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({contents:[{parts:[{text:txt}]}]})}); const d=await res.json(); chatHistory.value.push({role:'model', text:d.candidates[0].content.parts[0].text}); }catch(e){ chatHistory.value.push({role:'model', text:'Error'}); } isAiThinking.value=false; };
+                const analyzeItinerary = async () => { if(!geminiApiKey.value) return alert("請設定 API Key"); const d = days.value[currentDayIndex.value].items.map(i => i.time + ' ' + i.title).join('\n'); activeTab.value='ai'; chatHistory.value.push({role:'user', text: '分析行程：\n'+d}); sendMessage(); };
+                const initMap = () => { if(window.L) { const map = L.map('map').setView([13.7563, 100.5018], 13); L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(map); } };
+                const locateUser = () => { if (!navigator.geolocation) return alert('瀏覽器不支援定位'); loadingLocation.value = true; navigator.geolocation.getCurrentPosition((pos) => { loadingLocation.value = false; if (!window.mapInstance && window.L) { window.mapInstance = L.map('map').setView([pos.coords.latitude, pos.coords.longitude], 15); L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(window.mapInstance); } const icon = L.divIcon({ className: 'custom-div-icon', html: "<div style='background-color:#3B82F6; width:15px; height:15px; border-radius:50%; border:2px solid white; box-shadow:0 0 10px rgba(0,0,0,0.3);'></div>", iconSize: [15, 15], iconAnchor: [7, 7] }); L.marker([pos.coords.latitude, pos.coords.longitude], { icon: icon }).addTo(window.mapInstance); window.mapInstance.flyTo([pos.coords.latitude, pos.coords.longitude], 15); }, () => { loadingLocation.value = false; alert('無法獲取位置'); }); };
+                const saveData = () => { const data = { days: days.value, expenses: expenses.value, users: users.value, rate: exchangeRate.value, geminiApiKey: geminiApiKey.value }; localStorage.setItem('bkk_pro_v31', JSON.stringify(data)); if(isFirebaseMode.value && db) db.collection('trips').doc('bkk_shared').set(data, {merge:true}); };
+                const saveFirebaseConfig = () => { try { let input = firebaseConfigInput.value; if(input.includes('=')) input = input.split('=')[1].trim().replace(/;$/, ''); const config = JSON.parse(JSON.stringify(eval('(' + input + ')'))); localStorage.setItem('user_firebase_config', JSON.stringify(config)); location.reload(); } catch(e) { alert("Config 格式錯誤"); } };
+                const initFirebase = (config) => { try { firebase.initializeApp(config); db = firebase.firestore(); firebase.auth().signInAnonymously(); currentFirebaseConfig.value = config; isFirebaseMode.value = true; db.collection('trips').doc('bkk_shared').onSnapshot(doc => { if(doc.exists) { const d=doc.data(); if(d.days) days.value=d.days; if(d.expenses) expenses.value=d.expenses; if(d.users) users.value=d.users; } }); } catch(e) { console.error(e); } };
+
+                const fetchWeather = async () => { 
+                    try { 
+                        const lat = 13.7563; const lng = 100.5018; 
+                        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=temperature_2m,weathercode&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=Asia%2FBangkok`); 
+                        const data = await res.json(); 
+                        if (data && data.daily) { 
+                            weatherData.value = { daily: data.daily, hourly: data.hourly }; 
+                        } 
+                    } catch (e) {} 
+                };
+
+                onMounted(async () => {
+                    const saved = JSON.parse(localStorage.getItem('bkk_pro_v31') || '{}');
+                    if(saved.days) days.value = saved.days; 
+                    if(saved.expenses) expenses.value = saved.expenses;
+                    if(saved.geminiApiKey) geminiApiKey.value = saved.geminiApiKey;
+                    if(saved.users) users.value = saved.users;
+                    
+                    setTimeout(() => {
+                         const loader = document.getElementById('loading-screen');
+                         if(loader) loader.style.display = 'none';
+                    }, 500);
+
+                    const fbConfig = localStorage.getItem('user_firebase_config');
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const invite = urlParams.get('invite');
+                    if (invite) { try { const config = JSON.parse(atob(invite)); localStorage.setItem('user_firebase_config', JSON.stringify(config)); window.history.replaceState({}, document.title, window.location.pathname); initFirebase(config); } catch(e){} } 
+                    else if (fbConfig && typeof firebase !== 'undefined') { initFirebase(JSON.parse(fbConfig)); }
+                    
+                    fetchRate();
+                    fetchWeather();
+                });
+
+                return {
+                    activeTab, switchTab, currentDateDisplay, days, currentDayIndex, currentDayItems, expenses, sortedExpenses, totalExpenseTHB, totalExpenseTWD,
+                    showAddEvent, showAddExpense, showSettings, showSettlement, isFirebaseMode, firebaseConfigInput, geminiApiKey,
+                    chatInput, chatHistory, isAiThinking, eventForm, expenseForm, editingItem, users, newUser, dailyForecast, getHourlyWeather, debts, generatedInviteUrl,
+                    addDay, closeEventModal, editItem, saveEvent, deleteEvent, saveExpense, deleteExpense, addUser, removeUser, resetAllData,
+                    fetchRate, saveApiKeys, copyInviteLink, sendMessage, saveFirebaseConfig, openGoogleMaps, getCategoryColor, getExpenseIcon, translateCategory, renderMarkdown, locateUser,
+                    loadingRate, calcTWD, calcTHB, updateFromTWD, updateFromTHB, searchNearbyExchange, searchBrand, analyzeItinerary
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
